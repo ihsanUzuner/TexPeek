@@ -69,7 +69,9 @@ if errorlevel 1 goto fail
 goto done
 
 :noiscc
-echo Inno Setup not found. Install it with:  winget install JRSoftware.InnoSetup
+echo Inno Setup 6 not found. Install it with:  winget install JRSoftware.InnoSetup
+rem On the build server a release without Setup.exe must not look like a success
+if defined CI goto fail
 echo The zip is ready, Setup.exe was skipped.
 
 :done

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cwctype>
 
 namespace
 {
@@ -45,6 +46,34 @@ namespace
         const std::wstring name = FileNameOf(path);
         const size_t dot = name.find_last_of(L'.');
         return dot == std::wstring::npos ? name : name.substr(0, dot);
+    }
+
+    // Dosya adı renk değil "veri" texture'ı gibi mi duruyor (normal, roughness, AO, yükseklik...)?
+    // Adı "_", "-", "." ve boşluklardan parçalara ayırıp bilinen kısaltmaları arar:
+    // "forest_leaves_02_nor_gl_4k.exr" -> forest, leaves, 02, nor, gl, 4k -> "nor" tanıdık.
+    bool LooksLikeDataTexture(const std::wstring& path)
+    {
+        static const wchar_t* const words[] = {
+            L"nor", L"nrm", L"normal", L"normals", L"rough", L"roughness", L"gloss", L"glossiness", L"smoothness",
+            L"metal", L"metallic", L"metalness", L"ao", L"occlusion", L"arm", L"orm", L"mask", L"masks",
+            L"disp", L"displacement", L"height", L"bump", L"spec", L"specular", L"opacity", L"alpha",
+        };
+        std::wstring name = StemOf(path);
+        std::transform(name.begin(), name.end(), name.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+
+        size_t start = 0;
+        while (start <= name.size())
+        {
+            size_t end = name.find_first_of(L"_-. ", start);
+            if (end == std::wstring::npos)
+                end = name.size();
+            const std::wstring part = name.substr(start, end - start);
+            for (const wchar_t* word : words)
+                if (part == word)
+                    return true;
+            start = end + 1;
+        }
+        return false;
     }
 
     // ShaderParams::flags bitleri (HLSL tarafındaki sayılarla aynı)
@@ -375,7 +404,9 @@ void Viewer::ResetViewSettings()
     m_alphaTest = false;
     m_alphaThreshold = 0.5f;
     // HDR (float) veriler linear saklanır; BC5 neredeyse her zaman iki kanallı normal map'tir.
-    m_linearData = DirectX::FormatDataType(format) == DirectX::FORMAT_TYPE_FLOAT;
+    // İstisna: EXR olarak kaydedilmiş normal / roughness gibi veri texture'ları. Onlar renk değil,
+    // gamma uygulanırsa soluk görünürler; adından anlaşılıyorsa değerler olduğu gibi gösterilir.
+    m_linearData = DirectX::FormatDataType(format) == DirectX::FORMAT_TYPE_FLOAT && !LooksLikeDataTexture(m_doc->Path());
     m_normalMode = (format == DXGI_FORMAT_BC5_UNORM || format == DXGI_FORMAT_BC5_SNORM) ? NormalRG : NormalOff;
     m_pixelX = m_pixelY = -1;
     m_exportMessage.clear();

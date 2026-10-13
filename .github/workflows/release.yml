@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check that the tag matches the VERSION file
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -27,17 +27,19 @@ jobs:
         run: build-release.bat
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release/TexPeek-Setup-*.exe
             release/TexPeek-*-portable.zip
+          fail_on_unmatched_files: true
           generate_release_notes: true
       - name: Keep artifacts (manual runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release
+          if-no-files-found: error
           path: |
             release/TexPeek-Setup-*.exe
             release/TexPeek-*-portable.zip
