@@ -1,0 +1,135 @@
+cmake_minimum_required(VERSION 3.21)
+
+# Sürüm numarası tek yerde durur: kökteki VERSION dosyası. Exe'nin özellikleri, build-release.bat
+# ve kurulum programı da oradan okur.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" TEXPEEK_VERSION LIMIT_COUNT 1)
+string(STRIP "${TEXPEEK_VERSION}" TEXPEEK_VERSION)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS VERSION)   # VERSION değişince yeniden yapılandır
+
+project(TexPeek VERSION ${TEXPEEK_VERSION} LANGUAGES C CXX)   # C: tinyexr'in kullandığı miniz için
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# C++ çalışma kütüphanesini exe / dll'in içine göm (/MT). Böylece program başka bir bilgisayarda
+# "Visual C++ Redistributable" kurmadan çalışır. Kütüphanelerden önce durmalı ki onlara da uygulansın.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+include(FetchContent)
+
+# ---------------------------------------------------------------------------
+# Dış kütüphaneler: ilk derlemede GitHub'dan otomatik indirilir (git gerekir).
+# ---------------------------------------------------------------------------
+
+# DirectXTex: DDS / TGA / HDR / PNG okuma, ileride dönüştürme (MIT)
+set(BUILD_TOOLS  OFF CACHE BOOL "" FORCE)   # texconv vb. araçlar lazım değil
+set(BUILD_SAMPLE OFF CACHE BOOL "" FORCE)   # örnek uygulama lazım değil
+set(BUILD_DX12   OFF CACHE BOOL "" FORCE)   # biz DirectX 11 kullanıyoruz
+FetchContent_Declare(
+    DirectXTex
+    GIT_REPOSITORY https://github.com/microsoft/DirectXTex.git
+    GIT_TAG        may2026
+    GIT_SHALLOW    TRUE
+)
+
+# Dear ImGui: arayüz (MIT)
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.92.9b
+    GIT_SHALLOW    TRUE
+)
+
+# tinyexr: EXR okuma (BSD-3). Kendi CMake dosyasını kullanmıyoruz (örnekleri de derlemeye
+# çalışıyor); SOURCE_SUBDIR ile yalnızca kaynağı indirtip aşağıda kendimiz ekliyoruz.
+FetchContent_Declare(
+    tinyexr
+    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+    GIT_TAG        v1.0.9
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  cmake-kullanilmiyor
+)
+
+FetchContent_MakeAvailable(DirectXTex imgui tinyexr)
+
+add_library(tinyexr STATIC
+    ${tinyexr_SOURCE_DIR}/tinyexr.cc
+    ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c
+)
+target_include_directories(tinyexr PUBLIC
+    ${tinyexr_SOURCE_DIR}
+    ${tinyexr_SOURCE_DIR}/deps/miniz
+)
+
+# ImGui'nin kendi CMake dosyası yok, kaynaklarını biz ekliyoruz.
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+)
+target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+# ---------------------------------------------------------------------------
+# TexPeek
+# ---------------------------------------------------------------------------
+
+# Simge + sürüm bilgisi: res/version.rc.in şablonundan exe ve dll için birer .rc dosyası üretilir.
+set(RC_FILENAME    "texpeek.exe")
+set(RC_DESCRIPTION "TexPeek texture viewer")
+set(RC_FILETYPE    "VFT_APP")
+set(RC_ICON_LINE   "1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/res/texpeek.ico\"")
+configure_file(res/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/texpeek.rc" @ONLY)
+
+set(RC_FILENAME    "TexPeekThumb.dll")
+set(RC_DESCRIPTION "TexPeek DDS thumbnail provider")
+set(RC_FILETYPE    "VFT_DLL")
+set(RC_ICON_LINE   "")
+configure_file(res/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/texpeek_thumb.rc" @ONLY)
+
+add_executable(texpeek WIN32
+    src/main.cpp
+    src/TextureDoc.cpp
+    src/Viewer.cpp
+    src/FormatNames.cpp
+    src/Lang.cpp
+    src/ShellIntegration.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/texpeek.rc"
+)
+
+# Gezgin için DDS küçük resim eklentisi. texpeek.exe'nin yanına TexPeekThumb.dll olarak çıkar;
+# Windows'a kaydı programın içindeki "Windows > Kur" düğmesi yapar.
+add_library(texpeek_thumb SHARED
+    src/thumb/ThumbProvider.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/texpeek_thumb.rc"
+)
+set_target_properties(texpeek_thumb PROPERTIES OUTPUT_NAME "TexPeekThumb")
+target_link_libraries(texpeek_thumb PRIVATE DirectXTex ole32)
+target_compile_definitions(texpeek_thumb PRIVATE UNICODE _UNICODE NOMINMAX)
+add_dependencies(texpeek texpeek_thumb)   # exe derlenince DLL de derlensin
+
+target_link_libraries(texpeek PRIVATE
+    DirectXTex
+    imgui
+    tinyexr
+    d3d11 dxgi
+    d3dcompiler # görüntü shader'ını çalışırken derlemek için
+    shell32     # sürükle-bırak
+    comdlg32    # "Dosya Aç" penceresi
+    ole32       # COM (PNG/JPG okuma için gerekli)
+)
+
+target_compile_definitions(texpeek PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+if(MSVC)
+    # Kaynak dosyalar UTF-8: Türkçe karakterler doğru görünsün
+    target_compile_options(texpeek PRIVATE /utf-8 /W4)
+    target_compile_options(imgui PRIVATE /utf-8)
+    target_compile_options(texpeek_thumb PRIVATE /utf-8 /W4)
+endif()

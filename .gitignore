@@ -1,0 +1,14 @@
+# Derleme çıktıları
+build/
+out/
+
+# Kişisel çalışma notları (depoya girmez)
+CLAUDE.md
+
+# Editör dosyaları
+.vs/
+*.user
+
+# Yayın paketi (build-release.bat)
+build-release/
+release/

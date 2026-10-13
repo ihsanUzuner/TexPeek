@@ -1,0 +1,27 @@
+TexPeek includes the following third-party components. They are compiled into
+texpeek.exe and TexPeekThumb.dll. The full license texts are in the licenses\ folder.
+
+DirectXTex (may2026) - reads DDS / TGA / HDR and Windows image formats
+  Copyright (c) Microsoft Corporation. License: MIT.
+  https://github.com/microsoft/DirectXTex
+  Full license text: licenses\DirectXTex.txt
+
+Dear ImGui (v1.92.9b) - user interface
+  Copyright (c) 2014-2026 Omar Cornut. License: MIT.
+  https://github.com/ocornut/imgui
+  Full license text: licenses\imgui.txt
+
+tinyexr (v1.0.9) - reads EXR files
+  Copyright (c) 2014 - 2021, Syoyo Fujita and many contributors. License: BSD 3-Clause.
+  Contains some OpenEXR code, Copyright (c) 2002, Industrial Light & Magic, a division of
+  Lucas Digital Ltd. LLC. License: BSD 3-Clause.
+  https://github.com/syoyo/tinyexr
+  Full license text: licenses\tinyexr.txt
+
+miniz (the copy shipped with tinyexr) - decompression used by tinyexr
+  Copyright 2013-2014 RAD Game Tools and Valve Software
+  Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC. License: MIT.
+  https://github.com/richgel999/miniz
+  Full license text: licenses\miniz.txt
+
+TexPeek itself is under the MIT License, see the LICENSE file.

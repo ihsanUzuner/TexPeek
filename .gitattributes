@@ -1,0 +1,2 @@
+# cmd, satır sonu LF olan .bat dosyalarında etiketleri (goto) şaşırabiliyor: her zaman CRLF kalsın
+*.bat text eol=crlf

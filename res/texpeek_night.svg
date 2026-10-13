@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<defs>
+  <pattern id="chk" width="43" height="43" patternUnits="userSpaceOnUse" x="62" y="22">
+  <rect width="43" height="43" fill="#FFFFFF"/><rect width="21.5" height="21.5" fill="#C9CED8"/><rect x="21.5" y="21.5" width="21.5" height="21.5" fill="#C9CED8"/></pattern>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1E2A5A"/><stop offset="1" stop-color="#3B4FA0"/></linearGradient>
+  <clipPath id="front"><rect x="22" y="62" width="172" height="172" rx="12"/></clipPath>
+  </defs>
+<rect x="62" y="22" width="172" height="172" rx="12" fill="url(#chk)"/>
+<rect x="52" y="32" width="172" height="172" rx="12" fill="#3B82F6"/>
+<rect x="42" y="42" width="172" height="172" rx="12" fill="#2FD18B"/>
+<rect x="32" y="52" width="172" height="172" rx="12" fill="#FF4D5E"/>
+<g clip-path="url(#front)"><g transform="translate(22 62) scale(0.67188)">
+  <rect width="256" height="256" fill="url(#sky)"/>
+  <circle cx="172" cy="80" r="36" fill="#FFF1B8"/>
+  <path d="M0 256 V168 L56 126 L106 166 L106 256 Z" fill="#26336B"/>
+  <path d="M0 256 V200 L84 114 L146 178 L186 138 L256 198 V256 Z" fill="#0E1430"/>
+  </g></g>
+</svg>
