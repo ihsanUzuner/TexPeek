@@ -11,17 +11,19 @@ Dear ImGui (v1.92.9b) - user interface
   https://github.com/ocornut/imgui
   Full license text: licenses\imgui.txt
 
-tinyexr (v1.0.9) - reads EXR files
-  Copyright (c) 2014 - 2021, Syoyo Fujita and many contributors. License: BSD 3-Clause.
-  Contains some OpenEXR code, Copyright (c) 2002, Industrial Light & Magic, a division of
-  Lucas Digital Ltd. LLC. License: BSD 3-Clause.
-  https://github.com/syoyo/tinyexr
-  Full license text: licenses\tinyexr.txt
+OpenEXR (v3.3.14, the OpenEXRCore library) - reads EXR files
+  Copyright (c) Contributors to the OpenEXR Project. License: BSD 3-Clause.
+  https://github.com/AcademySoftwareFoundation/openexr
+  Full license text: licenses\openexr.txt
 
-miniz (the copy shipped with tinyexr) - decompression used by tinyexr
-  Copyright 2013-2014 RAD Game Tools and Valve Software
-  Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC. License: MIT.
-  https://github.com/richgel999/miniz
-  Full license text: licenses\miniz.txt
+Imath (v3.1.12) - half-float support used by OpenEXR
+  Copyright Contributors to the OpenEXR Project. License: BSD 3-Clause.
+  https://github.com/AcademySoftwareFoundation/Imath
+  Full license text: licenses\imath.txt
+
+libdeflate (v1.18) - decompression used by OpenEXR
+  Copyright 2016 Eric Biggers. License: MIT.
+  https://github.com/ebiggers/libdeflate
+  Full license text: licenses\libdeflate.txt
 
 TexPeek itself is under the MIT License, see the LICENSE file.

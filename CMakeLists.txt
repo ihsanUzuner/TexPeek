@@ -6,7 +6,7 @@ file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" TEXPEEK_VERSION LIMIT_COUNT 1
 string(STRIP "${TEXPEEK_VERSION}" TEXPEEK_VERSION)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS VERSION)   # VERSION değişince yeniden yapılandır
 
-project(TexPeek VERSION ${TEXPEEK_VERSION} LANGUAGES C CXX)   # C: tinyexr'in kullandığı miniz için
+project(TexPeek VERSION ${TEXPEEK_VERSION} LANGUAGES C CXX)   # C: OpenEXR'nin çekirdeği C ile yazılmış
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,26 +40,33 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 
-# tinyexr: EXR okuma (BSD-3). Kendi CMake dosyasını kullanmıyoruz (örnekleri de derlemeye
-# çalışıyor); SOURCE_SUBDIR ile yalnızca kaynağı indirtip aşağıda kendimiz ekliyoruz.
+# OpenEXR: EXR okuma (BSD-3). EXR formatının resmi kütüphanesi; DWAA / DWAB dahil bütün sıkıştırma
+# türlerini okur (Poly Haven'ın EXR'leri DWAA'dır; daha önce kullanılan tinyexr bunu desteklemiyordu).
+# Yalnızca C ile yazılmış çekirdeğini (OpenEXRCore) kullanıyoruz. SOURCE_SUBDIR ile burada yalnızca
+# kaynağı indirtip aşağıda EXCLUDE_FROM_ALL ile ekliyoruz: böylece kütüphanenin kullanmadığımız
+# C++ kısımları hiç derlenmez. Kendi bağımlılıklarını (Imath, libdeflate) OpenEXR kendisi indirir.
 FetchContent_Declare(
-    tinyexr
-    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
-    GIT_TAG        v1.0.9
+    openexr
+    GIT_REPOSITORY https://github.com/AcademySoftwareFoundation/openexr.git
+    GIT_TAG        v3.3.14
     GIT_SHALLOW    TRUE
     SOURCE_SUBDIR  cmake-kullanilmiyor
 )
 
-FetchContent_MakeAvailable(DirectXTex imgui tinyexr)
+FetchContent_MakeAvailable(DirectXTex imgui openexr)
 
-add_library(tinyexr STATIC
-    ${tinyexr_SOURCE_DIR}/tinyexr.cc
-    ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c
-)
-target_include_directories(tinyexr PUBLIC
-    ${tinyexr_SOURCE_DIR}
-    ${tinyexr_SOURCE_DIR}/deps/miniz
-)
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)   # yukarıdaki /MT ayarı OpenEXR ve bağımlılıklarına da uygulansın
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPENEXR_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(OPENEXR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(OPENEXR_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+set(OPENEXR_INSTALL OFF CACHE BOOL "" FORCE)
+set(OPENEXR_INSTALL_TOOLS OFF CACHE BOOL "" FORCE)
+set(OPENEXR_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
+set(OPENEXR_FORCE_INTERNAL_IMATH ON CACHE BOOL "" FORCE)     # bilgisayarda kurulu bir kopya aranmasın
+set(OPENEXR_FORCE_INTERNAL_DEFLATE ON CACHE BOOL "" FORCE)
+add_subdirectory(${openexr_SOURCE_DIR} ${openexr_BINARY_DIR} EXCLUDE_FROM_ALL)
 
 # ImGui'nin kendi CMake dosyası yok, kaynaklarını biz ekliyoruz.
 add_library(imgui STATIC
@@ -117,7 +124,7 @@ add_dependencies(texpeek texpeek_thumb)   # exe derlenince DLL de derlensin
 target_link_libraries(texpeek PRIVATE
     DirectXTex
     imgui
-    tinyexr
+    OpenEXR::OpenEXRCore
     d3d11 dxgi
     d3dcompiler # görüntü shader'ını çalışırken derlemek için
     shell32     # sürükle-bırak

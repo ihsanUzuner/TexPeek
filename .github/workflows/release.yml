@@ -21,7 +21,7 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y --no-progress
-      # MSVC, CMake and Git come with the runner image; DirectXTex, Dear ImGui and tinyexr are fetched by CMake.
+      # MSVC, CMake and Git come with the runner image; DirectXTex, Dear ImGui and OpenEXR are fetched by CMake.
       - name: Build (zip + Setup.exe)
         shell: cmd
         run: build-release.bat

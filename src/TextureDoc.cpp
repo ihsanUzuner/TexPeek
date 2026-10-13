@@ -1,15 +1,18 @@
 #include "TextureDoc.h"
 #include "Lang.h"
 
-#include "tinyexr.h"
+#include <openexr.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
-#include <fstream>
+#include <string>
+#include <thread>
 #include <vector>
 
 using namespace DirectX;
@@ -33,44 +36,231 @@ namespace
         return buf;
     }
 
-    // EXR dosyasını tinyexr ile okur; sonuç her zaman 32-bit float RGBA olur.
+    // OpenEXR dosya adını UTF-8 ister (Türkçe karakterli yollar için)
+    std::string ToUtf8(const std::wstring& w)
+    {
+        if (w.empty())
+            return {};
+        const int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+        std::string s(len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), len, nullptr, nullptr);
+        return s;
+    }
+
+    // EXR kanal adının son harfi: "R" ya da "diffuse.R" -> 'R'. Tek harfli değilse 0 döner.
+    char ExrChannelLetter(const char* name)
+    {
+        const char* dot = std::strrchr(name, '.');
+        const char* base = dot ? dot + 1 : name;
+        return (base[0] != '\0' && base[1] == '\0') ? (char)std::toupper((unsigned char)base[0]) : '\0';
+    }
+
+    // EXR dosyasını OpenEXR ile okur; sonuç her zaman 32-bit float RGBA olur.
+    // EXR'de pikseller "chunk" denen parçalar halinde saklanır (birkaç satırlık şeritler ya da karolar);
+    // her parça ayrı sıkıştırılmıştır, bu yüzden parçaları birden fazla iş parçacığıyla aynı anda açabiliyoruz.
     bool LoadExr(const std::wstring& path, TexMetadata& meta, ScratchImage& image, std::string& error)
     {
-        // Dosyayı kendimiz okuyoruz ki Türkçe karakterli yollar sorun çıkarmasın.
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file)
+        auto fail = [&](const char* detail)
         {
-            error = Tr("Dosya açılamadı.", "Could not open the file.");
+            error = std::string(Tr("EXR okunamadı: ", "Could not read the EXR: ")) + detail;
             return false;
-        }
-        std::vector<unsigned char> bytes((size_t)file.tellg());
-        file.seekg(0);
-        file.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
+        };
 
-        float* rgba = nullptr;
-        int width = 0, height = 0;
-        const char* detail = nullptr;
-        if (LoadEXRFromMemory(&rgba, &width, &height, bytes.data(), bytes.size(), &detail) != TINYEXR_SUCCESS)
+        exr_context_initializer_t init = EXR_DEFAULT_CONTEXT_INITIALIZER;
+        exr_context_t ctx = nullptr;
+        exr_result_t rv = exr_start_read(&ctx, ToUtf8(path).c_str(), &init);
+        if (rv != EXR_ERR_SUCCESS)
+            return fail(exr_get_default_error_message(rv));
+
+        // Fonksiyondan hangi yoldan çıkılırsa çıkılsın dosya kapansın
+        struct Closer
         {
-            error = std::string(Tr("EXR okunamadı: ", "Could not read the EXR: ")) + (detail ? detail : Tr("bilinmeyen hata", "unknown error"));
-            FreeEXRErrorMessage(detail);
-            return false;
+            exr_context_t& ctx;
+            ~Closer() { exr_finish(&ctx); }
+        } closer{ ctx };
+
+        const int part = 0;   // çok parçalı dosyalarda ilk parça
+        exr_storage_t storage = EXR_STORAGE_UNKNOWN;
+        exr_attr_box2i_t dw = {};
+        const exr_attr_chlist_t* channels = nullptr;
+        if ((rv = exr_get_storage(ctx, part, &storage)) != EXR_ERR_SUCCESS ||
+            (rv = exr_get_data_window(ctx, part, &dw)) != EXR_ERR_SUCCESS ||
+            (rv = exr_get_channels(ctx, part, &channels)) != EXR_ERR_SUCCESS)
+            return fail(exr_get_default_error_message(rv));
+        if (storage != EXR_STORAGE_SCANLINE && storage != EXR_STORAGE_TILED)
+            return fail(Tr("derin (deep) EXR desteklenmiyor.", "deep EXR images are not supported."));
+        const bool tiled = storage == EXR_STORAGE_TILED;
+
+        const int64_t width = (int64_t)dw.max.x - dw.min.x + 1;
+        const int64_t height = (int64_t)dw.max.y - dw.min.y + 1;
+        if (width <= 0 || height <= 0)
+            return fail(Tr("görüntü boş.", "the image is empty."));
+
+        // Hangi kanal RGBA'nın neresine gidecek? Önce düz adlar (R, G, B, A, Y), renk bulunamazsa
+        // ilk katmanın kanalları ("diffuse.R" gibi). Y tek başına parlaklıktır: gri olarak gösterilir.
+        const char* slotName[4] = {};   // R, G, B, A'ya okunacak kanalın adı
+        const char* lumaName = nullptr;
+        for (int pass = 0; pass < 2 && !slotName[0] && !slotName[1] && !slotName[2] && !lumaName; ++pass)
+        {
+            std::string layer;
+            bool haveLayer = false;
+            for (int i = 0; i < channels->num_channels; ++i)
+            {
+                const exr_attr_chlist_entry_t& entry = channels->entries[i];
+                const char* name = entry.name.str;
+                const char* dot = std::strrchr(name, '.');
+                if ((pass == 1) != (dot != nullptr) || entry.x_sampling != 1 || entry.y_sampling != 1)
+                    continue;
+                if (dot)
+                {
+                    const std::string prefix(name, dot);
+                    if (!haveLayer) { layer = prefix; haveLayer = true; }
+                    else if (prefix != layer) continue;
+                }
+                switch (ExrChannelLetter(name))
+                {
+                case 'R': if (!slotName[0]) slotName[0] = name; break;
+                case 'G': if (!slotName[1]) slotName[1] = name; break;
+                case 'B': if (!slotName[2]) slotName[2] = name; break;
+                case 'A': if (!slotName[3]) slotName[3] = name; break;
+                case 'Y': if (!lumaName) lumaName = name; break;
+                }
+            }
+        }
+        if (!slotName[0] && !slotName[1] && !slotName[2] && !lumaName)
+        {
+            // Tanıdık bir ad yok (ör. yalnızca "Z" derinlik kanalı): ilk kanalı gri olarak göster
+            for (int i = 0; i < channels->num_channels && !lumaName; ++i)
+                if (channels->entries[i].x_sampling == 1 && channels->entries[i].y_sampling == 1)
+                    lumaName = channels->entries[i].name.str;
+            if (!lumaName)
+                return fail(Tr("gösterilebilecek kanal yok.", "there is no channel that can be shown."));
+        }
+        const bool luma = !slotName[0] && !slotName[1] && !slotName[2];
+        if (luma)
+            slotName[0] = lumaName;   // R'ye okunur, sonra G ve B'ye kopyalanır
+        const bool hasAlpha = slotName[3] != nullptr;
+
+        // Açılacak parçaların listesi. Satır düzeninde y = parçanın ilk satırı; karo düzeninde x, y = karo sırası.
+        struct Chunk { int x, y; };
+        std::vector<Chunk> chunks;
+        int32_t tileWidth = 0, tileHeight = 0;
+        if (tiled)
+        {
+            int32_t countX = 0, countY = 0;
+            if ((rv = exr_get_tile_sizes(ctx, part, 0, 0, &tileWidth, &tileHeight)) != EXR_ERR_SUCCESS ||
+                (rv = exr_get_tile_counts(ctx, part, 0, 0, &countX, &countY)) != EXR_ERR_SUCCESS)
+                return fail(exr_get_default_error_message(rv));
+            for (int ty = 0; ty < countY; ++ty)
+                for (int tx = 0; tx < countX; ++tx)
+                    chunks.push_back({ tx, ty });
+        }
+        else
+        {
+            int32_t linesPerChunk = 0;
+            if ((rv = exr_get_scanlines_per_chunk(ctx, part, &linesPerChunk)) != EXR_ERR_SUCCESS || linesPerChunk <= 0)
+                return fail(exr_get_default_error_message(rv));
+            for (int64_t y = dw.min.y; y <= dw.max.y; y += linesPerChunk)
+                chunks.push_back({ 0, (int)y });
         }
 
         const HRESULT hr = image.Initialize2D(DXGI_FORMAT_R32G32B32A32_FLOAT, (size_t)width, (size_t)height, 1, 1);
-        if (SUCCEEDED(hr))
-        {
-            const Image* img = image.GetImage(0, 0, 0);
-            const size_t rowBytes = (size_t)width * 4 * sizeof(float);
-            for (size_t y = 0; y < (size_t)height; ++y)
-                std::memcpy(img->pixels + y * img->rowPitch, reinterpret_cast<const uint8_t*>(rgba) + y * rowBytes, rowBytes);
-            meta = image.GetMetadata();
-        }
-        std::free(rgba);
-
         if (FAILED(hr))
+        {
             error = HResultText(Tr("EXR için bellek ayrılamadı.", "Could not allocate memory for the EXR."), hr);
-        return SUCCEEDED(hr);
+            return false;
+        }
+        const Image* img = image.GetImage(0, 0, 0);
+        const size_t pixelBytes = 4 * sizeof(float);
+
+        // Her iş parçacığı sıradaki parçayı alır, açar ve doğrudan görüntünün belleğine yazar.
+        std::atomic<size_t> next{ 0 };
+        std::atomic<int> firstError{ EXR_ERR_SUCCESS };
+        auto worker = [&]
+        {
+            exr_decode_pipeline_t decoder = EXR_DECODE_PIPELINE_INITIALIZER;
+            bool ready = false;
+            for (;;)
+            {
+                const size_t index = next++;
+                if (index >= chunks.size() || firstError != EXR_ERR_SUCCESS)
+                    break;
+                const Chunk& chunk = chunks[index];
+
+                exr_chunk_info_t info = {};
+                exr_result_t r = tiled
+                    ? exr_read_tile_chunk_info(ctx, part, chunk.x, chunk.y, 0, 0, &info)
+                    : exr_read_scanline_chunk_info(ctx, part, chunk.y, &info);
+                if (r == EXR_ERR_SUCCESS)
+                    r = ready ? exr_decoding_update(ctx, part, &info, &decoder) : exr_decoding_initialize(ctx, part, &info, &decoder);
+
+                // Parçanın görüntüdeki sol üst köşesi
+                const size_t px = tiled ? (size_t)chunk.x * (size_t)tileWidth : 0;
+                const size_t py = tiled ? (size_t)chunk.y * (size_t)tileHeight : (size_t)((int64_t)info.start_y - dw.min.y);
+                uint8_t* dst = img->pixels + py * img->rowPitch + px * pixelBytes;
+
+                if (r == EXR_ERR_SUCCESS)
+                {
+                    for (int c = 0; c < decoder.channel_count; ++c)
+                    {
+                        exr_coding_channel_info_t& ch = decoder.channels[c];
+                        ch.decode_to_ptr = nullptr;   // nullptr: bu kanalı atla
+                        for (int slot = 0; slot < 4; ++slot)
+                            if (slotName[slot] && std::strcmp(ch.channel_name, slotName[slot]) == 0 && ch.width > 0 && ch.height > 0)
+                            {
+                                // Dosyada half / float / uint ne varsa float'a çevrilip RGBA'daki yerine yazılsın
+                                ch.decode_to_ptr = dst + (size_t)slot * sizeof(float);
+                                ch.user_pixel_stride = (int32_t)pixelBytes;
+                                ch.user_line_stride = (int32_t)img->rowPitch;
+                                ch.user_bytes_per_element = (int16_t)sizeof(float);
+                                ch.user_data_type = EXR_PIXEL_FLOAT;
+                            }
+                    }
+                    if (!ready)
+                    {
+                        r = exr_decoding_choose_default_routines(ctx, part, &decoder);
+                        ready = true;
+                    }
+                }
+                if (r == EXR_ERR_SUCCESS)
+                    r = exr_decoding_run(ctx, part, &decoder);
+                if (r != EXR_ERR_SUCCESS)
+                {
+                    int expected = EXR_ERR_SUCCESS;
+                    firstError.compare_exchange_strong(expected, (int)r);
+                    break;
+                }
+
+                // Dosyada olmayan kanallar: gri görüntüde G ve B, alfa yoksa A = 1
+                if (luma || !hasAlpha)
+                    for (int32_t y = 0; y < info.height; ++y)
+                    {
+                        float* p = reinterpret_cast<float*>(dst + (size_t)y * img->rowPitch);
+                        for (int32_t x = 0; x < info.width; ++x, p += 4)
+                        {
+                            if (luma) p[1] = p[2] = p[0];
+                            if (!hasAlpha) p[3] = 1.0f;
+                        }
+                    }
+            }
+            exr_decoding_destroy(ctx, &decoder);
+        };
+
+        const size_t threadCount = std::min<size_t>({ chunks.size(), 16, std::max(1u, std::thread::hardware_concurrency()) });
+        std::vector<std::thread> threads;
+        for (size_t i = 1; i < threadCount; ++i)
+            threads.emplace_back(worker);
+        worker();   // bu iş parçacığı da çalışsın
+        for (std::thread& t : threads)
+            t.join();
+
+        if (firstError != EXR_ERR_SUCCESS)
+        {
+            image.Release();
+            return fail(exr_get_default_error_message((exr_result_t)firstError.load()));
+        }
+        meta = image.GetMetadata();
+        return true;
     }
 
     // GPU'nun tek bir 2D texture için kabul ettiği en büyük kenar uzunluğu.
